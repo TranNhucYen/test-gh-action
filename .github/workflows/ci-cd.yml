@@ -40,9 +40,6 @@ jobs:
     name: Build and push Docker Image to GHCR
     runs-on: ubuntu-latest
     needs: test
-
-    # Chỉ push image khi push lên main,
-    # không push image từ pull request.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     permissions:
@@ -58,7 +55,9 @@ jobs:
 
       - name: Set lowercase image name
         id: image
-        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+        run: |
+          IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "name=$IMAGE_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Login to GHCR
         uses: docker/login-action@v4
@@ -77,36 +76,89 @@ jobs:
             ${{ steps.image.outputs.name }}:${{ github.sha }}
           cache-from: type=gha,scope=test-gh-action
           cache-to: type=gha,scope=test-gh-action,mode=max
+
   deploy:
-    name: Deploy to VPS
+    name: Deploy to EC2 via AWS SSM
     runs-on: ubuntu-latest
     needs: build-and-push
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
+    permissions:
+      contents: read
+      id-token: write
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-     
-      - name: Copy docker-compose file to VPS
-        uses: appleboy/scp-action@v1
-        with:
-          host: ${{ secrets.HOST }}
-          username: ${{ secrets.USERNAME }}
-          key: ${{ secrets.SSH_KEY }}
-          port: 22
-          source: "docker-compose.yml"
-          target: "/home/${{ secrets.USERNAME }}/my-project-deploy/"
-          
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.HOST }}
-          username: ${{ secrets.USERNAME }}
-          key: ${{ secrets.SSH_KEY }}
-          port: 22
-          script: |
-            cd ~/my-project-deploy
-            docker compose pull
-            docker compose up -d
 
-# xử lí comit empty
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/${{ vars.AWS_ROLE_NAME }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Verify AWS Identity
+        run: aws sts get-caller-identity
+
+      - name: Prepare deployment
+        id: deploy
+        run: |
+          IMAGE_NAME="ghcr.io/${GITHUB_REPOSITORY,,}"
+          IMAGE_TAG="$GITHUB_SHA"
+
+          COMPOSE_B64=$(base64 -w 0 docker-compose.yml)
+
+          printf 'IMAGE_NAME=%s\nIMAGE_TAG=%s\n' \
+            "$IMAGE_NAME" \
+            "$IMAGE_TAG" > deploy.env
+
+          ENV_B64=$(base64 -w 0 deploy.env)
+
+          echo "compose_b64=$COMPOSE_B64" >> "$GITHUB_OUTPUT"
+          echo "env_b64=$ENV_B64" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy via AWS SSM
+        env:
+          EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
+          COMPOSE_B64: ${{ steps.deploy.outputs.compose_b64 }}
+          ENV_B64: ${{ steps.deploy.outputs.env_b64 }}
+
+        run: |
+          COMMAND="
+            mkdir -p '${DEPLOY_DIR}' &&
+            printf '%s' '${COMPOSE_B64}' | base64 -d > '${DEPLOY_DIR}/docker-compose.yml' &&
+            printf '%s' '${ENV_B64}' | base64 -d > '${DEPLOY_DIR}/.env' &&
+            cd '${DEPLOY_DIR}' &&
+            docker compose pull &&
+            docker compose up -d
+          "
+
+          jq -n --arg command "$COMMAND"  '{commands: [$command]}' > ssm-parameters.json
+
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$EC2_INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters file://ssm-parameters.json \
+            --comment "Deploy from GitHub Actions" \
+            --query 'Command.CommandId' \
+            --output text)
+
+          echo "SSM Command ID: $COMMAND_ID"
+
+          set +e
+          aws ssm wait command-executed \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$EC2_INSTANCE_ID"
+          WAIT_STATUS=$?
+          set -e
+
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$EC2_INSTANCE_ID" \
+            --output json
+
+          if [ "$WAIT_STATUS" -ne 0 ]; then
+            echo "Deployment failed!"
+            exit 1
+          fi
