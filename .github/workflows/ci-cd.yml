@@ -106,3 +106,5 @@ jobs:
             cd ~/my-project-deploy
             docker compose pull
             docker compose up -d
+
+# xử lí comit empty
