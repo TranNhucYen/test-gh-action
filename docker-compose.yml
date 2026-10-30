@@ -1,6 +1,6 @@
 services:
   nextjs:
-    image: my-nextjs-app:1.1
+    image: ghcr.io/trannhucyen/test-gh-action:latest
     container_name: my-nextjs-container
     ports:
       - "3000:3000"
