@@ -17,6 +17,7 @@ export default function Home() {
             TEST GITHUB-ACTIONS <br />
             Hello lần 2
             Hello lần 3
+            Hello lần 3
             To get started, edit the{" "}
             <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
               page.tsx
