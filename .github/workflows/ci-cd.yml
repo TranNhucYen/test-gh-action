@@ -75,6 +75,8 @@ jobs:
           tags: |
             ${{ steps.image.outputs.name }}:latest
             ${{ steps.image.outputs.name }}:${{ github.sha }}
+          cache-from: type=gha,scope=test-gh-action
+          cache-to: type=gha,scope=test-gh-action,mode=max
   deploy:
     name: Deploy to VPS
     runs-on: ubuntu-latest
