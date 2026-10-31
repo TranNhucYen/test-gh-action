@@ -19,6 +19,7 @@ export default function Home() {
             Hello lần 3
             OIDC OK
             To get started, edit the{" "}
+            <h1 className="text-2xl font-bold">Chỉ còn lại ánh mặt nụ cười một thời trẻ trung</h1>
             <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
               page.tsx
             </code>{" "}
